@@ -1,0 +1,449 @@
+#include <iostream>
+#include <string>
+#include <iomanip>
+#include <limits>
+#include <fstream>
+#include <sstream>
+using namespace std;
+
+const int SUBJECTS = 5;
+const string DATA_FILE = "students.csv";
+const string SUBJECT_NAMES[SUBJECTS] = {"Maths", "Physics", "Chemistry", "English", "Computer"};
+
+// ---------------------------------------------------------------
+// Student record (marks stored in an ARRAY)
+// ---------------------------------------------------------------
+struct Student {
+    int id;
+    string name;
+    float marks[SUBJECTS];
+
+    float total() const {
+        float t = 0;
+        for (int i = 0; i < SUBJECTS; i++) t += marks[i];
+        return t;
+    }
+    float average() const { return total() / SUBJECTS; }
+    char grade() const {
+        float a = average();
+        if (a >= 90) return 'A';
+        if (a >= 75) return 'B';
+        if (a >= 60) return 'C';
+        if (a >= 40) return 'D';
+        return 'F';
+    }
+};
+
+// ---------------------------------------------------------------
+// LINKED LIST node
+// ---------------------------------------------------------------
+struct Node {
+    Student data;
+    Node* next;
+    Node(const Student& s) : data(s), next(nullptr) {}
+};
+
+// ---------------------------------------------------------------
+// QUEUE (linked implementation) - pending registrations
+// ---------------------------------------------------------------
+class StudentQueue {
+    struct QNode {
+        Student data;
+        QNode* next;
+        QNode(const Student& s) : data(s), next(nullptr) {}
+    };
+    QNode *front, *rear;
+    int count;
+public:
+    StudentQueue() : front(nullptr), rear(nullptr), count(0) {}
+    ~StudentQueue() { while (!isEmpty()) { Student s; dequeue(s); } }
+
+    bool isEmpty() const { return front == nullptr; }
+    int size() const { return count; }
+
+    void enqueue(const Student& s) {
+        QNode* n = new QNode(s);
+        if (!rear) front = rear = n;
+        else { rear->next = n; rear = n; }
+        count++;
+    }
+    bool dequeue(Student& out) {
+        if (isEmpty()) return false;
+        QNode* t = front;
+        out = t->data;
+        front = front->next;
+        if (!front) rear = nullptr;
+        delete t;
+        count--;
+        return true;
+    }
+    void display() const {
+        if (isEmpty()) { cout << "  (queue is empty)\n"; return; }
+        int pos = 1;
+        for (QNode* c = front; c; c = c->next)
+            cout << "  " << pos++ << ". ID " << c->data.id << " - " << c->data.name << "\n";
+    }
+};
+
+// ---------------------------------------------------------------
+// STACK (array implementation) - undo history
+// ---------------------------------------------------------------
+enum ActionType { ADDED, DELETED, UPDATED };
+
+struct Action {
+    ActionType type;
+    Student before;   // record before the change (for DELETED / UPDATED)
+    int id;           // id of affected student (for ADDED)
+};
+
+class UndoStack {
+    static const int MAX = 50;
+    Action items[MAX];
+    int top;
+public:
+    UndoStack() : top(-1) {}
+    bool isEmpty() const { return top == -1; }
+    bool isFull() const { return top == MAX - 1; }
+
+    void push(const Action& a) {
+        if (isFull()) {                      // drop the oldest action
+            for (int i = 1; i < MAX; i++) items[i - 1] = items[i];
+            top--;
+        }
+        items[++top] = a;
+    }
+    bool pop(Action& a) {
+        if (isEmpty()) return false;
+        a = items[top--];
+        return true;
+    }
+};
+
+// ---------------------------------------------------------------
+// Main database (LINKED LIST)
+// ---------------------------------------------------------------
+class MarksSystem {
+    Node* head;
+    int count;
+    StudentQueue pending;
+    UndoStack undo;
+
+    Node* findNode(int id) const {
+        for (Node* c = head; c; c = c->next)
+            if (c->data.id == id) return c;
+        return nullptr;
+    }
+
+    // insert in sorted order of ID, no history recorded
+    void insertSorted(const Student& s) {
+        Node* n = new Node(s);
+        if (!head || s.id < head->data.id) { n->next = head; head = n; }
+        else {
+            Node* c = head;
+            while (c->next && c->next->data.id < s.id) c = c->next;
+            n->next = c->next;
+            c->next = n;
+        }
+        count++;
+    }
+
+    bool removeNode(int id) {
+        Node *c = head, *prev = nullptr;
+        while (c && c->data.id != id) { prev = c; c = c->next; }
+        if (!c) return false;
+        if (prev) prev->next = c->next; else head = c->next;
+        delete c;
+        count--;
+        return true;
+    }
+
+    // ---- file storage (CSV, opens in Excel) ----
+    void saveToFile() const {
+        ofstream out(DATA_FILE.c_str());
+        if (!out) {
+            cout << "  WARNING: could not write " << DATA_FILE
+                 << ". Close it in Excel and make another change to save.\n";
+            return;
+        }
+        out << "ID,Name";
+        for (int i = 0; i < SUBJECTS; i++) out << "," << SUBJECT_NAMES[i];
+        out << ",Total,Average,Grade\n";
+        for (Node* c = head; c; c = c->next) {
+            const Student& s = c->data;
+            out.unsetf(ios::floatfield);
+            out << setprecision(6);
+            out << s.id << "," << s.name;
+            for (int i = 0; i < SUBJECTS; i++) out << "," << s.marks[i];
+            out << "," << s.total() << "," << fixed << setprecision(2) << s.average()
+                << "," << s.grade() << "\n";
+        }
+    }
+
+    static void printHeader() {
+        cout << left << setw(6) << "ID" << setw(18) << "Name";
+        for (int i = 0; i < SUBJECTS; i++) cout << setw(11) << SUBJECT_NAMES[i];
+        cout << setw(8) << "Total" << setw(8) << "Avg" << "Grade\n";
+        cout << string(6 + 18 + 11 * SUBJECTS + 8 + 8 + 5, '-') << "\n";
+    }
+    static void printRow(const Student& s) {
+        cout << left << setw(6) << s.id << setw(18) << s.name;
+        for (int i = 0; i < SUBJECTS; i++) cout << setw(11) << fixed << setprecision(1) << s.marks[i];
+        cout << setw(8) << s.total() << setw(8) << setprecision(2) << s.average() << s.grade() << "\n";
+    }
+
+public:
+    MarksSystem() : head(nullptr), count(0) {}
+    ~MarksSystem() {
+        while (head) { Node* t = head; head = head->next; delete t; }
+    }
+
+    void loadFromFile() {
+        ifstream in(DATA_FILE.c_str());
+        if (!in) return;                    // first run: no file yet
+        string line;
+        getline(in, line);                  // skip header row
+        int loaded = 0;
+        while (getline(in, line)) {
+            if (line.empty()) continue;
+            stringstream ss(line);
+            string field;
+            Student st;
+            try {
+                getline(ss, field, ','); st.id = stoi(field);
+                getline(ss, st.name, ',');
+                for (int i = 0; i < SUBJECTS; i++) {
+                    getline(ss, field, ',');
+                    st.marks[i] = stof(field);
+                }
+            } catch (...) { continue; }     // skip bad rows
+            if (!findNode(st.id)) { insertSorted(st); loaded++; }
+        }
+        cout << "Loaded " << loaded << " student(s) from " << DATA_FILE << ".\n";
+    }
+
+    // ---- input helpers ----
+    static int readInt(const string& prompt) {
+        int x;
+        while (true) {
+            cout << prompt;
+            if (cin >> x) { cin.ignore(numeric_limits<streamsize>::max(), '\n'); return x; }
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            cout << "  Invalid number, try again.\n";
+        }
+    }
+    static float readMark(const string& prompt) {
+        float x;
+        while (true) {
+            cout << prompt;
+            if (cin >> x && x >= 0 && x <= 100) {
+                cin.ignore(numeric_limits<streamsize>::max(), '\n');
+                return x;
+            }
+            cin.clear();
+            cin.ignore(numeric_limits<streamsize>::max(), '\n');
+            cout << "  Marks must be between 0 and 100.\n";
+        }
+    }
+    Student readStudent() {
+        Student s;
+        while (true) {
+            s.id = readInt("  Enter ID: ");
+            if (findNode(s.id)) cout << "  ID already exists in database.\n";
+            else break;
+        }
+        cout << "  Enter name: ";
+        getline(cin, s.name);
+        for (size_t k = 0; k < s.name.size(); k++)
+            if (s.name[k] == ',') s.name[k] = ' ';   // commas would break the CSV
+        for (int i = 0; i < SUBJECTS; i++)
+            s.marks[i] = readMark("  " + SUBJECT_NAMES[i] + " marks: ");
+        return s;
+    }
+
+    // ---- operations ----
+    void addStudent() {
+        Student s = readStudent();
+        insertSorted(s);
+        Action a; a.type = ADDED; a.id = s.id;
+        undo.push(a);
+        saveToFile();
+        cout << "Student added.\n";
+    }
+
+    void queueStudent() {
+        Student s = readStudent();
+        pending.enqueue(s);
+        cout << "Student placed in pending queue (position " << pending.size() << ").\n";
+    }
+
+    void processQueue() {
+        if (pending.isEmpty()) { cout << "No pending registrations.\n"; return; }
+        Student s;
+        pending.dequeue(s);
+        if (findNode(s.id)) {
+            cout << "ID " << s.id << " was already added meanwhile. Skipped.\n";
+            return;
+        }
+        insertSorted(s);
+        Action a; a.type = ADDED; a.id = s.id;
+        undo.push(a);
+        saveToFile();
+        cout << "Processed " << s.name << " (ID " << s.id << ") from queue.\n";
+    }
+
+    void showQueue() const {
+        cout << "Pending registrations (" << pending.size() << "):\n";
+        pending.display();
+    }
+
+    void deleteStudent() {
+        int id = readInt("  Enter ID to delete: ");
+        Node* n = findNode(id);
+        if (!n) { cout << "Student not found.\n"; return; }
+        Action a; a.type = DELETED; a.before = n->data; a.id = id;
+        undo.push(a);
+        removeNode(id);
+        saveToFile();
+        cout << "Student deleted.\n";
+    }
+
+    void updateMarks() {
+        int id = readInt("  Enter ID to update: ");
+        Node* n = findNode(id);
+        if (!n) { cout << "Student not found.\n"; return; }
+        Action a; a.type = UPDATED; a.before = n->data; a.id = id;
+        undo.push(a);
+        for (int i = 0; i < SUBJECTS; i++)
+            n->data.marks[i] = readMark("  New " + SUBJECT_NAMES[i] + " marks: ");
+        saveToFile();
+        cout << "Marks updated.\n";
+    }
+
+    void searchStudent() const {
+        int id = readInt("  Enter ID to search: ");
+        Node* n = findNode(id);
+        if (!n) { cout << "Student not found.\n"; return; }
+        printHeader();
+        printRow(n->data);
+    }
+
+    void displayAll() const {
+        if (!head) { cout << "No student records.\n"; return; }
+        printHeader();
+        for (Node* c = head; c; c = c->next) printRow(c->data);
+        cout << "Total students: " << count << "\n";
+    }
+
+    void undoLast() {
+        Action a;
+        if (!undo.pop(a)) { cout << "Nothing to undo.\n"; return; }
+        switch (a.type) {
+            case ADDED:
+                removeNode(a.id);
+                saveToFile();
+                cout << "Undo: removed student ID " << a.id << ".\n";
+                break;
+            case DELETED:
+                insertSorted(a.before);
+                saveToFile();
+                cout << "Undo: restored student ID " << a.id << ".\n";
+                break;
+            case UPDATED: {
+                Node* n = findNode(a.id);
+                if (n) n->data = a.before;
+                saveToFile();
+                cout << "Undo: restored old marks of ID " << a.id << ".\n";
+                break;
+            }
+        }
+    }
+
+    // ---- ranking: copy list into an ARRAY, then sort it ----
+    void showRanking() const {
+        if (!head) { cout << "No student records.\n"; return; }
+        Student* arr = new Student[count];
+        int i = 0;
+        for (Node* c = head; c; c = c->next) arr[i++] = c->data;
+
+        // bubble sort by total, descending
+        for (int a = 0; a < count - 1; a++)
+            for (int b = 0; b < count - a - 1; b++)
+                if (arr[b].total() < arr[b + 1].total()) swap(arr[b], arr[b + 1]);
+
+        cout << "\n=== Rank List ===\n";
+        cout << left << setw(6) << "Rank" << setw(6) << "ID" << setw(18) << "Name"
+             << setw(10) << "Total" << setw(10) << "Average" << "Grade\n";
+        cout << string(55, '-') << "\n";
+        for (int r = 0; r < count; r++)
+            cout << left << setw(6) << r + 1 << setw(6) << arr[r].id << setw(18) << arr[r].name
+                 << setw(10) << fixed << setprecision(1) << arr[r].total()
+                 << setw(10) << setprecision(2) << arr[r].average() << arr[r].grade() << "\n";
+        delete[] arr;
+    }
+
+    // ---- statistics using arrays ----
+    void subjectStats() const {
+        if (!head) { cout << "No student records.\n"; return; }
+        float sum[SUBJECTS] = {0}, hi[SUBJECTS], lo[SUBJECTS];
+        for (int i = 0; i < SUBJECTS; i++) { hi[i] = 0; lo[i] = 100; }
+        for (Node* c = head; c; c = c->next)
+            for (int i = 0; i < SUBJECTS; i++) {
+                float m = c->data.marks[i];
+                sum[i] += m;
+                if (m > hi[i]) hi[i] = m;
+                if (m < lo[i]) lo[i] = m;
+            }
+        cout << "\n" << left << setw(12) << "Subject" << setw(10) << "Average"
+             << setw(10) << "Highest" << "Lowest\n";
+        cout << string(42, '-') << "\n";
+        for (int i = 0; i < SUBJECTS; i++)
+            cout << left << setw(12) << SUBJECT_NAMES[i] << setw(10) << fixed << setprecision(2)
+                 << sum[i] / count << setw(10) << hi[i] << lo[i] << "\n";
+    }
+};
+
+// ---------------------------------------------------------------
+// Menu
+// ---------------------------------------------------------------
+int main() {
+    MarksSystem sys;
+    sys.loadFromFile();
+    int choice;
+
+    do {
+        cout << "\n===== STUDENT MARKS MANAGEMENT SYSTEM =====\n"
+             << " 1. Add student (direct)\n"
+             << " 2. Register student to pending queue\n"
+             << " 3. Process next pending registration\n"
+             << " 4. View pending queue\n"
+             << " 5. Display all students\n"
+             << " 6. Search student by ID\n"
+             << " 7. Update student marks\n"
+             << " 8. Delete student\n"
+             << " 9. Show rank list\n"
+             << "10. Subject-wise statistics\n"
+             << "11. Undo last action\n"
+             << " 0. Exit\n";
+        choice = MarksSystem::readInt("Enter choice: ");
+        cout << "\n";
+
+        switch (choice) {
+            case 1:  sys.addStudent();     break;
+            case 2:  sys.queueStudent();   break;
+            case 3:  sys.processQueue();   break;
+            case 4:  sys.showQueue();      break;
+            case 5:  sys.displayAll();     break;
+            case 6:  sys.searchStudent();  break;
+            case 7:  sys.updateMarks();    break;
+            case 8:  sys.deleteStudent();  break;
+            case 9:  sys.showRanking();    break;
+            case 10: sys.subjectStats();   break;
+            case 11: sys.undoLast();       break;
+            case 0:  cout << "Goodbye!\n"; break;
+            default: cout << "Invalid choice.\n";
+        }
+    } while (choice != 0);
+
+    return 0;
+}
